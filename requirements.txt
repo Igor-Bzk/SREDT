@@ -1,7 +1,5 @@
-numpy
-sys
-operator
-pandas
-scipy
-scikit-learn
-deap
+numpy>=1.26.0
+pandas>=1.5.0
+scipy>=1.10.0
+scikit-learn>=1.2.0
+deap>=1.3.1
