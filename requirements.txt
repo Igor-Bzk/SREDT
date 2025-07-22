@@ -1,0 +1,7 @@
+numpy
+sys
+operator
+pandas
+scipy
+scikit-learn
+deap
