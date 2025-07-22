@@ -4,7 +4,7 @@ from numpy import ndarray, array, searchsorted, argsort, isfinite
 from deap import base, creator, gp, tools, algorithms
 from pandas import DataFrame
 from scipy.optimize import minimize_scalar
-from SREDT.utils import gini, split_gini
+from SREDT.utils import split_gini
 
 class SymbolicClassifier:
     """
@@ -100,12 +100,16 @@ class SymbolicClassifier:
     
     @staticmethod
     def sqrt(x):
+        if isinstance(x, ndarray):
+            return array([float('nan') if xi < 0 else operator.pow(xi, 0.5) for xi in x])
         if x < 0:
             return float('nan')
         return operator.pow(x, 0.5)
     
     @staticmethod
     def div(x, y):
+        if isinstance(x, ndarray) and isinstance(y, ndarray):
+            return array([float('inf') if yi == 0 and xi > 0 else float('-inf') if yi == 0 and xi < 0 else operator.truediv(xi, yi) for xi, yi in zip(x, y)])
         if y == 0 and x > 0:
             return float('inf')
         elif y == 0 and x < 0:

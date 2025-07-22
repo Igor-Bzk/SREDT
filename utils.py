@@ -76,3 +76,13 @@ def readable_deap_function(expr):
 
     expr_node, _ = parse_tree(expr)
     return node_to_str(expr_node)
+
+def pickle(clf, filename):
+    from dill import dump
+    with open(filename, 'wb') as f:
+        dump(clf, f)
+
+def unpickle(filename):
+    from dill import load
+    with open(filename, 'rb') as f:
+        return load(f)

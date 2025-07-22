@@ -73,7 +73,7 @@ class SREDTClassifier:
         max_expression_height (int): The maximum height of the tree representing a symbolic expression.
         cost_complexity_threshold (float): The threshold for cost complexity pruning (if None, pruning is disabled).
     """
-    def __init__(self, function_set=('add', 'mul'), generations=50, population_size=50, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=0.01):
+    def __init__(self, function_set=('add', 'mul'), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=0.01):
         self.function_set = function_set
         if 'add' in function_set or 'mul' in function_set or 'square' in function_set or 'sub' in function_set or 'div' in function_set or 'sqrt' in function_set:
             if 'and' in function_set or 'or' in function_set or 'not' in function_set or 'xor' in function_set:
