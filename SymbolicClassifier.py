@@ -24,7 +24,7 @@ class SymbolicClassifier:
         evalSplit(individual): Evaluate the fitness of an individual by calculating the Gini impurity of the split it represents.        
     """
 
-    def __init__(self, X, y, function_set=('add', 'mul'), algorithm='eaSimple', max_expression_height=3, arithmetic=True):
+    def __init__(self, X, y, function_set=('add', 'mul'), algorithm='eaSimple', max_expression_height=3, arithmetic=True, nb_classes=None):
         if not isinstance(X, ndarray):
             if isinstance(X, DataFrame):
                 X = X.values
@@ -43,6 +43,7 @@ class SymbolicClassifier:
         self.algorithm = algorithm
         self.max_expression_height = max_expression_height
         self.arithmetic = arithmetic
+        self.nb_classes = nb_classes if nb_classes is not None else max(y) + 1 if isinstance(y, ndarray) else max(y.values) + 1
         if self.arithmetic:
             self.pset = gp.PrimitiveSetTyped("main", [float for _ in range(X.shape[1])], float)
             if 'add' in function_set:
@@ -119,9 +120,13 @@ class SymbolicClassifier:
     def evalSplit(self, individual):
         func = self.toolbox.compile(expr=individual)
         if not self.arithmetic:
-            left_mask = array([func(*features) for features in self.X], dtype=bool)
+            try:
+                left_mask = func(*self.X.T).astype(bool)
+            except Exception:
+                print("Vectorized evaluation failed in evalSplit.")
+                left_mask = array([func(*features) for features in self.X], dtype=bool)
             right_mask = ~left_mask
-            return split_gini(self.y[left_mask], self.y[right_mask]),
+            return split_gini(self.y[left_mask], self.y[right_mask], nb_classes=self.nb_classes),
         _, best_gini = self.findBestThreshold(func)
         return (best_gini,)
 
@@ -133,7 +138,11 @@ class SymbolicClassifier:
         """
         if len(self.X) == 1:
             return function(*self.X[0]), 0.
-        predictions = array([function(*features) for features in self.X])
+        try:
+            predictions = function(*self.X.T)
+        except Exception:
+            print("Vectorized evaluation failed in findBestThreshold.")
+            predictions = array([function(*features) for features in self.X])
         prediction_order = argsort(predictions)
         predictions = predictions[prediction_order]
         sorted_labels = self.y[prediction_order]
@@ -141,7 +150,7 @@ class SymbolicClassifier:
         def gini_split_on(threshold_i):
             if not isinstance(threshold_i, int):
                 threshold_i = int(threshold_i)
-            return split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:])
+            return split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:], nb_classes=self.nb_classes)
 
         def gini_from_value(threshold):
             return gini_split_on(searchsorted(predictions, threshold)-1)
@@ -154,7 +163,7 @@ class SymbolicClassifier:
         if result.success:
             return result.x, gini_from_value(result.x)
 
-    def fit(self, generations=100, population_size=200):
+    def fit(self, generations=1000, population_size=100):
         random.seed(41)
         pop = self.toolbox.population(n=population_size)
         if self.algorithm == 'eaSimple':

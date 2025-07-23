@@ -1,14 +1,14 @@
 import numpy as np
 
-def gini(y_subset):
+def gini(y_subset, nb_classes=None):
     if len(y_subset) == 0:
         return 0.0
-    classes, counts = np.unique(y_subset, return_counts=True)
+    counts = np.bincount(y_subset, minlength=nb_classes) if nb_classes is not None else np.bincount(y_subset)
     probs = counts / len(y_subset)
     return 1.0 - np.sum(probs ** 2)
 
-def split_gini(y_left, y_right):
-    return (len(y_left) * gini(y_left) + len(y_right) * gini(y_right)) / (len(y_left) + len(y_right))
+def split_gini(y_left, y_right, nb_classes=None):
+    return (len(y_left) * gini(y_left, nb_classes=nb_classes) + len(y_right) * gini(y_right, nb_classes=nb_classes)) / (len(y_left) + len(y_right))
 
 def splitSetOnFunction(func, X, y, threshold):
     if threshold is None:

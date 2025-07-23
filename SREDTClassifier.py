@@ -1,6 +1,6 @@
 from SREDT.SymbolicClassifier import SymbolicClassifier
-from SREDT.utils import gini, splitSetOnFunction, readable_deap_function
-from numpy import ndarray, array, stack, bincount
+from SREDT.utils import gini, splitSetOnFunction, readable_deap_function, split_gini
+from numpy import ndarray, array, stack, bincount, max
 
 class SREDT_node:
     """
@@ -90,20 +90,20 @@ class SREDTClassifier:
         self.cost_complexity_threshold = cost_complexity_threshold
 
     def fit(self, X, y):
+        self.nb_classes = max(y) + 1 if isinstance(y, ndarray) else max(y.values) + 1
         def build_SREDT(X, y, depth=0):
-            
             def make_leaf():
-                class_distribution = bincount(y)
+                class_distribution = bincount(y, minlength=self.nb_classes)
                 majority_class = class_distribution.argmax()
                 print(f"Leaf at depth {depth} with majority class: {majority_class} at predominance: {class_distribution[majority_class]/len(y)}")
                 return SREDT_leaf(majority_class=majority_class)
-            if gini(y) < 0.1 or depth >= self.max_depth:
+            if gini(y, nb_classes=self.nb_classes) < 0.1 or depth >= self.max_depth:
                 return make_leaf()
-            clf = SymbolicClassifier(X, y, function_set=self.function_set, algorithm=self.algorithm, max_expression_height=self.max_expression_height, arithmetic=self.arithmetic)
+            clf = SymbolicClassifier(X, y, function_set=self.function_set, algorithm=self.algorithm, max_expression_height=self.max_expression_height, arithmetic=self.arithmetic, nb_classes=self.nb_classes)
             clf.fit(generations=self.generations, population_size=self.population_size)
             left, right, left_labels, right_labels = splitSetOnFunction(clf.best_function, X, y, clf.threshold)
-            print(f"Depth: {depth}, Gini: {gini(y)}, Left: {len(left_labels)}, Right: {len(right_labels)}")
-            if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and gini(y) - (gini(left_labels)/len(left_labels) + gini(right_labels)/len(right_labels)) < self.cost_complexity_threshold):
+            print(f"Depth: {depth}, Gini: {gini(y, nb_classes=self.nb_classes)}, Left: {len(left_labels)}, Right: {len(right_labels)}")
+            if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and (gini(y, nb_classes=self.nb_classes) - split_gini(left_labels, right_labels, nb_classes=self.nb_classes) < self.cost_complexity_threshold)):
                 return make_leaf()
             else:
                 node = SREDT_node(clf.best_function, clf.threshold, clf.best, build_SREDT(left, left_labels, depth + 1), build_SREDT(right, right_labels, depth + 1), self.arithmetic)
