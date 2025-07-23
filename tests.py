@@ -17,7 +17,11 @@ def load_simple_data():
     return X_features, y
 
 def test_SREDT(dataset='circles'):
-
+    """
+    Test the SREDT classifier on one of two simple datasets.
+    Args:
+        dataset (str): 'circles' or 'simple'. Default is 'circles' from sklearn.datasets.make_circles. Other dataset is a simple synthetic dataset.
+    """
     if dataset == 'circles':
         X_features, y = load_circles()
     elif dataset == 'simple':
@@ -25,17 +29,10 @@ def test_SREDT(dataset='circles'):
     else:
         raise ValueError("Unknown dataset")
 
-    test = SREDTClassifier(generations=100, population_size=20, function_set=('add', 'mul', 'square'))
+    test = SREDTClassifier(generations=100, population_size=30, function_set=('add', 'mul', 'square'))
     test.fit(X_features, y)
-    predictions = test.predict(X_features)    
+    predictions = test.predict(X_features)
+    print("Classifier:", test)
     print("Accuracy:", accuracy_score(y, predictions))
     print("Confusion Matrix:")
     print(confusion_matrix(y, predictions))
-
-
-if __name__ == "__main__":
-    if len(sys.argv) > 1:
-        dataset_name = sys.argv[1]
-    else:
-        dataset_name = 'circles'
-    test_SREDT(dataset=dataset_name)
