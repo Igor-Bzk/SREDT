@@ -1,6 +1,6 @@
 from SREDT.SymbolicClassifier import SymbolicClassifier
 from SREDT.utils import gini, splitSetOnFunction, readable_deap_function, split_gini
-from numpy import ndarray, array, stack, bincount, max
+from numpy import ndarray, array, stack, bincount, max, empty
 
 class SREDT_node:
     """
@@ -27,15 +27,23 @@ class SREDT_node:
         if isinstance(rep, ndarray):
             args_arr = stack(args)
             if not self.arithmetic:
-            # no threshold for logical functions
-                return array([
-                    self.left(*args_arr[:, r]) if not rep[r] else self.right(*args_arr[:, r])
-                    for r in range(args_arr.shape[1])
-                ])
-            return array([
-                self.left(*args_arr[:, r]) if not rep[r] > self.threshold else self.right(*args_arr[:, r])
-                for r in range(args_arr.shape[1])
-            ])
+                mask = rep.astype(bool)
+            else:
+                mask = rep > self.threshold
+
+            # Split the arguments based on the mask from the node's function
+            left_args = args_arr[:, ~mask]
+            right_args = args_arr[:, mask]
+
+            # Evaluate the left and right functions on the split arguments
+            left_results = self.left(*left_args)
+            right_results = self.right(*right_args)
+
+            # Reconstruct result array in original order
+            result = empty(rep.shape, dtype=left_results.dtype)
+            result[~mask] = left_results
+            result[mask] = right_results
+            return result
         
         # for non-array arguments
         if not self.arithmetic:
@@ -82,6 +90,10 @@ class SREDTClassifier:
         max_expression_height (int): The maximum height of the tree representing a symbolic expression.
         A height of n means expressions of at most 2^n - 1 nodes.
         cost_complexity_threshold (float): The threshold for cost complexity pruning (if None, pruning is disabled).
+        random_state (int): The random seed for reproducibility.
+    Methods:
+        fit(X, y): Fit the classifier to the training data.
+        predict(X): Predict the class labels for the input features.
     """
     def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41):
         if not isinstance(function_set, set):

@@ -11,15 +11,16 @@ class SymbolicClassifier:
     """
     A classifier using genetic programming to evolve a symbolic expression
     with a threshold to be used as a decision boundary for a decision tree.
-    Attributes:
-        X (np.ndarray or pd.DataFrame): The input features.
+    Arguments:
+        X (np.ndarray or pd.DataFrame): The input features (the classifier needs the dataset at creation to properly set up genetic programming functions).
         y (np.ndarray or pd.DataFrame): The target labels.
+    Parameters:
         function_set (set): The set of functions to be used in the symbolic expression (arithmetic and logical expressions cannot be mixed).
         max_expression_height (int): The maximum height of the tree representing a symbolic expression.
-        
-        algorithm (str): The genetic programming algorithm to use.
-        pset (gp.PrimitiveSetTyped): The primitive set for the genetic programming.
-        toolbox (base.Toolbox): The DEAP toolbox containing the genetic programming operations.
+        algorithm (str): The genetic programming algorithm to use (either 'eaSimple' or 'eaMuPlusLambda').
+        arithmetic (bool): Whether to use arithmetic functions (if True, it is assumed arithmetic functions are used so logical ones cannot be used).
+        random_state (int): The random seed for reproducibility.
+        nb_classes (int): The number of classes in the target labels (if None, it is inferred from the labels).
     Methods:
         fit(generations=100, population_size=200): Fit the symbolic classifier to the data.
         evalSplit(individual): Evaluate the fitness of an individual by calculating the Gini impurity of the split it represents.
@@ -89,20 +90,19 @@ class SymbolicClassifier:
         if not hasattr(creator, "Individual"):
             creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
 
+        # Create the toolbox and register the genetic programming operations
         self.toolbox = base.Toolbox()
         self.toolbox.register("expr", gp.genHalfAndHalf, pset=self.pset, min_=1, max_=min(self.max_expression_height, 3))
         self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.expr)
         self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
-
         self.toolbox.register("compile", gp.compile, pset=self.pset)
-
         self.toolbox.register("evaluate", self.evalSplit)
         self.toolbox.register("select", tools.selTournament, tournsize=3)
         self.toolbox.register("mate", gp.cxOnePoint)
         self.toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
         self.toolbox.register("mutate", gp.mutUniform, expr=self.toolbox.expr_mut, pset=self.pset)
         
-        # Limit the expression lenght by limiting the height of the tree
+        # Limit the expression length by limiting the height of the tree
         self.toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=self.max_expression_height))
         self.toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=self.max_expression_height))
 
