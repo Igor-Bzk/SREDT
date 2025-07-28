@@ -6,7 +6,6 @@ from pandas import DataFrame
 from scipy.optimize import minimize_scalar
 from SREDT.utils import split_gini
 from warnings import warn
-from hashlib import md5
 
 class SymbolicClassifier:
     """
@@ -28,7 +27,7 @@ class SymbolicClassifier:
         findBestThreshold(function): Find the threshold that minimizes the Gini impurity of the split represented by the given function.
     """
 
-    def __init__(self, X, y, function_set=set(('add', 'mul')), algorithm='eaSimple', max_expression_height=3, arithmetic=True, random_state=41, nb_classes=None, use_cache=True):
+    def __init__(self, X, y, function_set=set(('add', 'mul')), algorithm='eaSimple', max_expression_height=3, arithmetic=True, random_state=41, nb_classes=None):
         if not isinstance(X, ndarray):
             if isinstance(X, DataFrame):
                 self.X = X.values
@@ -56,10 +55,10 @@ class SymbolicClassifier:
         else:
             self.function_set = function_set
         
-        self.use_cache = use_cache
-        if use_cache:
-            self.gini_cache = dict()
-            self.cache_count = 0
+        self.gini_cache = dict()
+        self.gini_split_cache = dict()
+        self.gini_cache_count = 0
+        self.gini_split_cache_count = 0
 
         self.random_state = random_state
         self.algorithm = algorithm
@@ -135,14 +134,13 @@ class SymbolicClassifier:
         return operator.truediv(x, y)
 
     def evalSplit(self, individual):
-        if self.use_cache:
-                computedHash = str(individual)
-                cached_result = self.gini_cache.get(computedHash)
-                if cached_result is not None:
-                    self.cache_count += 1
-                    if self.arithmetic:
-                        return (cached_result[1],)
-                    return cached_result,
+        computedHash = str(individual)
+        cached_result = self.gini_cache.get(computedHash)
+        if cached_result is not None:
+            self.gini_cache_count += 1
+            if self.arithmetic:
+                return (cached_result[1],)
+            return cached_result,
         func = self.toolbox.compile(expr=individual)
         if not self.arithmetic:
             try:
@@ -152,8 +150,7 @@ class SymbolicClassifier:
                 left_mask = array([func(*features) for features in self.X], dtype=bool)
             right_mask = ~left_mask
             gini_results = split_gini(self.y[left_mask], self.y[right_mask], nb_classes=self.nb_classes)
-            if self.use_cache:
-                self.gini_cache[computedHash] = gini_results,
+            self.gini_cache[computedHash] = gini_results,
             return gini_results,
         _, best_gini = self.findBestThreshold(func, individual, computedHash=computedHash)
         return (best_gini,)
@@ -177,14 +174,20 @@ class SymbolicClassifier:
         prediction_order = argsort(predictions)
         predictions = predictions[prediction_order]
         sorted_labels = self.y[prediction_order]
-        
+        self.gini_split_cache.clear()
         def gini_split_on(threshold_i):
             """
             Calculate the Gini impurity of the split at the given threshold index.
             """
             if not isinstance(threshold_i, int):
                 threshold_i = int(threshold_i)
-            return split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:], nb_classes=self.nb_classes)
+            result = self.gini_split_cache.get((threshold_i, computedHash))
+            if result is not None:
+                self.gini_split_cache_count += 1
+                return result
+            result = split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:], nb_classes=self.nb_classes)
+            self.gini_split_cache[(threshold_i, computedHash)] = result
+            return result
 
         def gini_from_value(threshold):
             """
@@ -200,8 +203,9 @@ class SymbolicClassifier:
         result = minimize_scalar(gini_from_value, bounds=(finite_predictions[0],finite_predictions[-1]))
         if result.success:
             result_gini = gini_from_value(result.x)
-            if self.use_cache:
-                self.gini_cache[computedHash] = (result.x, result_gini)
+            if computedHash is None:
+                computedHash = str(individual)
+            self.gini_cache[computedHash] = (result.x, result_gini)
             return result.x, result_gini
         else:
             warn(f"Threshold finding failed: {result.message}. Returning 0.0 as threshold.")
@@ -217,17 +221,16 @@ class SymbolicClassifier:
             algorithms.eaMuPlusLambda(pop, self.toolbox, mu=population_size, lambda_=population_size, cxpb=0.5, mutpb=0.3, ngen=generations, verbose=False)
 
         # Save the best individual, its function and its optimal threshold
-        if self.use_cache:
-            print(f"Cache hits: {self.cache_count}")
-            self.gini_cache.clear()
+        print(f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
         self.best = tools.selBest(pop, 1)[0]
         self.best_function = self.toolbox.compile(expr=self.best)
         if not self.arithmetic:
             self.threshold = None
             self.final_gini = self.evalSplit(self.best)[0]
         else:
-            if self.use_cache:
-                computedHash = str(self.best)
-                self.threshold, self.final_gini = self.gini_cache.get(computedHash)
-                if self.threshold is None:
-                    self.threshold, self.final_gini = self.findBestThreshold(self.best_function, self.best, computedHash=computedHash)
+            computedHash = str(self.best)
+            self.threshold, self.final_gini = self.gini_cache.get(computedHash, (None, None))
+            if self.threshold is None:
+                print("Best not in cache")
+                self.threshold, self.final_gini = self.findBestThreshold(self.best_function, self.best)
+        self.gini_cache.clear()

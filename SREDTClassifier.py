@@ -95,7 +95,7 @@ class SREDTClassifier:
         fit(X, y): Fit the classifier to the training data.
         predict(X): Predict the class labels for the input features.
     """
-    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41, use_cache=True):
+    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41):
         if not isinstance(function_set, set):
             try:
                 self.function_set = set(function_set)
@@ -112,7 +112,6 @@ class SREDTClassifier:
         else:
             self.arithmetic = False
         
-        self.use_cache = use_cache
         self.random_state = random_state
         self.generations = generations
         self.population_size = population_size
@@ -124,6 +123,14 @@ class SREDTClassifier:
 
     def fit(self, X, y):
         self.nb_classes = max(y) + 1 if isinstance(y, ndarray) else max(y.values) + 1
+        
+        SR_params = {
+                'function_set': self.function_set,
+                'max_expression_height': self.max_expression_height,
+                'arithmetic': self.arithmetic,
+                'random_state': self.random_state,
+                'nb_classes': self.nb_classes,
+            }
         
         def build_SREDT(X, y, depth=0):
             def make_leaf():
@@ -137,14 +144,6 @@ class SREDTClassifier:
             if y_gini < 0.1 or depth >= self.max_depth:
                 return make_leaf()
             
-            SR_params = {
-                'function_set': self.function_set,
-                'max_expression_height': self.max_expression_height,
-                'arithmetic': self.arithmetic,
-                'random_state': self.random_state,
-                'nb_classes': self.nb_classes,
-                'use_cache': self.use_cache
-            }
             clf = SymbolicClassifier(X, y, **SR_params)
             clf.fit(generations=self.generations, population_size=self.population_size)
 
