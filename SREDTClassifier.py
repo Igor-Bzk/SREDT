@@ -95,7 +95,7 @@ class SREDTClassifier:
         fit(X, y): Fit the classifier to the training data.
         predict(X): Predict the class labels for the input features.
     """
-    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41):
+    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=10, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41, use_cache=True):
         if not isinstance(function_set, set):
             try:
                 self.function_set = set(function_set)
@@ -112,6 +112,7 @@ class SREDTClassifier:
         else:
             self.arithmetic = False
         
+        self.use_cache = use_cache
         self.random_state = random_state
         self.generations = generations
         self.population_size = population_size
@@ -132,7 +133,8 @@ class SREDTClassifier:
                 return SREDT_leaf(majority_class=majority_class)
             
             # make a leaf if there are no samples left or if the maximum depth is reached
-            if gini(y, nb_classes=self.nb_classes) < 0.1 or depth >= self.max_depth:
+            y_gini = gini(y, nb_classes=self.nb_classes)
+            if y_gini < 0.1 or depth >= self.max_depth:
                 return make_leaf()
             
             SR_params = {
@@ -140,17 +142,18 @@ class SREDTClassifier:
                 'max_expression_height': self.max_expression_height,
                 'arithmetic': self.arithmetic,
                 'random_state': self.random_state,
-                'nb_classes': self.nb_classes
+                'nb_classes': self.nb_classes,
+                'use_cache': self.use_cache
             }
             clf = SymbolicClassifier(X, y, **SR_params)
             clf.fit(generations=self.generations, population_size=self.population_size)
 
             left, right, left_labels, right_labels = splitSetOnFunction(clf.best_function, X, y, clf.threshold)
-            
-            print(f"Depth: {depth}, Gini: {gini(y, nb_classes=self.nb_classes)}, Left: {len(left_labels)}, Right: {len(right_labels)}")
-            
+
+            print(f"Depth: {depth}, Gini: {y_gini}, Left: {len(left_labels)}, Right: {len(right_labels)}")
+
             # make a leaf if one of the sides is empty or if the split does not improve the Gini impurity significantly
-            if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and (gini(y, nb_classes=self.nb_classes) - split_gini(left_labels, right_labels, nb_classes=self.nb_classes) < self.cost_complexity_threshold)):
+            if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and (y_gini - clf.final_gini < self.cost_complexity_threshold)):
                 return make_leaf()
             
             return SREDT_node(clf.best_function, clf.threshold, clf.best, build_SREDT(left, left_labels, depth + 1), build_SREDT(right, right_labels, depth + 1), self.arithmetic)

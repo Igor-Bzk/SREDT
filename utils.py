@@ -62,7 +62,7 @@ def readable_deap_function(expr):
             return f"({node_to_str(node.args[0])} && {node_to_str(node.args[1])})"
         elif node.name == 'or_':
             return f"({node_to_str(node.args[0])} || {node_to_str(node.args[1])})"
-        elif node.name == 'not_':
+        elif node.name == 'logical_not':
             return f"(!{node_to_str(node.args[0])})"
         elif node.name == 'xor':
             return f"({node_to_str(node.args[0])} ^ {node_to_str(node.args[1])})"
