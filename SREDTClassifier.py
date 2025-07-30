@@ -1,6 +1,6 @@
 from SREDT.SymbolicClassifier import SymbolicClassifier
-from SREDT.utils import gini, splitSetOnFunction, readable_deap_function, print_if_verbose
-from numpy import ndarray, array, stack, bincount, max, empty
+from SREDT.utils import gini, splitSetOnFunction, readable_deap_function
+from numpy import ndarray, array, stack, bincount, max, empty, log2, ceil
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from threading import Lock
 executor = None
@@ -110,12 +110,13 @@ class SREDTClassifier:
         A height of n means expressions of at most 2^n - 1 nodes.
         cost_complexity_threshold (float): The threshold for cost complexity pruning (if None, pruning is disabled).
         random_state (int): The random seed for reproducibility.
-        parallelization_height (int): The height of the tree that will be parallelized. This means running at most 2^parallelization_height processes and 2*2^(parallelization_height+1) - 1 + max_depth - parallelization_height threads.
+        nb_processes (int): The maximum number of processes to use for parallelization.
+        A maximum of 2**ceil(log2(nb_processes) + 1) + max_depth - ceil(log2(nb_processes)) threads besides the processes will be run.
     Methods:
         fit(X, y): Fit the classifier to the training data.
         predict(X): Predict the class labels for the input features.
     """
-    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=6, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41, parallelization_height=3, verbose=2):
+    def __init__(self, function_set=set(('add', 'mul')), generations=1000, population_size=100, max_depth=6, algorithm='eaSimple', max_expression_height=3, cost_complexity_threshold=None, random_state=41, nb_processes=8, verbose=2):
         if not isinstance(function_set, set):
             try:
                 self.function_set = set(function_set)
@@ -141,7 +142,9 @@ class SREDTClassifier:
         self.algorithm = algorithm
         self.max_expression_height = max_expression_height
         self.cost_complexity_threshold = cost_complexity_threshold
-        self.parallelization_height = parallelization_height
+        self.nb_processes = nb_processes
+        self.parallelization_height = ceil(log2(nb_processes))
+        self.initial_parallelization_height = self.parallelization_height
 
     def fit(self, X, y):
         self.nb_classes = max(y) + 1 if isinstance(y, ndarray) else max(y.values) + 1
@@ -149,17 +152,17 @@ class SREDTClassifier:
         # we create a toolbox in the SREDTClassifier in order to be able to compile the function outside of the classifier
         toolbox = SymbolicClassifier.make_toolbox(self.function_set, self.max_expression_height, X.shape[1], arithmetic=self.arithmetic)
         
-        global executor
         
         # Initialize the executor for parallel processing if parallelization is enabled
         if self.parallelization_height > 0:
+            global executor
             if executor is None:
                 # the max number of processes running at the same time is the number of leaves in the tree of parallelization_height
-                executor = ProcessPoolExecutor(max_workers=2**self.parallelization_height)
+                executor = ProcessPoolExecutor(max_workers=self.nb_processes)
             # the max number of threads running at the same time is the number of nodes in the tree of parallelization_height
             # plus max_depth - parallelization_height as parallelization_height is increased as leaves are made
-            # so we need to account for nodes from the top of the tree to the root of the parallelized subtree 
-            thread_executor = ThreadPoolExecutor(max_workers=(2**self.parallelization_height+1)-1+self.max_depth - self.parallelization_height)
+            # so we need to account for nodes from the top of the tree to the root of the parallelized subtree
+            thread_executor = ThreadPoolExecutor(max_workers=(2**self.parallelization_height + 1) - 1 + self.max_depth - self.parallelization_height)
             height_lock = Lock()
             
         SR_params = {
@@ -175,13 +178,13 @@ class SREDTClassifier:
             def make_leaf():
                 class_distribution = bincount(y, minlength=self.nb_classes)
                 majority_class = class_distribution.argmax()
-                print_if_verbose(self.verbose, 1, f"Leaf at depth {depth} with majority class: {majority_class} at predominance: {class_distribution[majority_class]/len(y)}")
+                self.print_if_verbose(1, f"Leaf at depth {depth} with majority class: {majority_class} at predominance: {class_distribution[majority_class]/len(y)}")
                 if self.parallelization_height > 0:
                     with height_lock:
                         # leaves liberate resources so parallelization height can be increased
                         # in a way to keep the number of processes running at the same time constant
                         # being equivalent to making the parallelized subtree start on deeper levels
-                        self.parallelization_height += 2**(int(self.parallelization_height) - depth - 2)
+                        self.parallelization_height += 2**(int(self.parallelization_height - self.initial_parallelization_height) - depth + 1)
                 return SREDT_leaf(majority_class=majority_class)
             
             # make a leaf if there are no samples left or if the maximum depth is reached
@@ -203,7 +206,7 @@ class SREDTClassifier:
             
             left, right, left_labels, right_labels = splitSetOnFunction(best_function, X, y, threshold)
 
-            print_if_verbose(self.verbose, 1, f"Depth: {depth}, Gini: {y_gini}, Left: {len(left_labels)}, Right: {len(right_labels)}")
+            self.print_if_verbose(1, f"Depth: {depth}, Gini: {y_gini}, Left: {len(left_labels)}, Right: {len(right_labels)}")
 
             # make a leaf if one of the sides is empty or if the split does not improve the Gini impurity significantly
             if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and (y_gini - final_gini < self.cost_complexity_threshold)):
@@ -213,13 +216,13 @@ class SREDTClassifier:
             if self.parallelization_height > 0:
                 with height_lock:
                     current_parallelization_height = self.parallelization_height
-                print_if_verbose(self.verbose, 2, f"Current parallelization height: {current_parallelization_height}")
+                self.print_if_verbose(2, f"Current parallelization height: {current_parallelization_height}")
             else:
                 current_parallelization_height = 0
             
             # if the current depth is less than the parallelization height, run the left and right branches in parallel
             # this allows to parallelize the training of the SR classifiers
-            if depth <= current_parallelization_height-1:
+            if depth <= current_parallelization_height - 1:
                 left_future = thread_executor.submit(build_SREDT, left, left_labels, depth + 1)
                 right_future = thread_executor.submit(build_SREDT, right, right_labels, depth + 1)
                 left = left_future.result()
@@ -233,6 +236,10 @@ class SREDTClassifier:
         if self.parallelization_height > 0:
             thread_executor.shutdown(wait=True)
             executor.shutdown(wait=True)
+    
+    def print_if_verbose(self, verbose_level, *args, **kwargs):
+        if self.verbose >= verbose_level:
+            print(*args, **kwargs)
 
     def predict(self,X):
         return self.root(*X.T)

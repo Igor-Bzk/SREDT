@@ -95,7 +95,3 @@ def unpickle(filename):
     from dill import load
     with open(filename, 'rb') as f:
         return load(f)
-
-def print_if_verbose(verbose, verbose_level, *args, **kwargs):
-    if verbose >= verbose_level:
-        print(*args, **kwargs)

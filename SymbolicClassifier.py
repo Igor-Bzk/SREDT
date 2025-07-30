@@ -1,10 +1,10 @@
 import operator
 import random
-from numpy import ndarray, array, searchsorted, argsort, isfinite, logical_not, concatenate
+from numpy import ndarray, array, searchsorted, argsort, isfinite, logical_not
 from deap import base, creator, gp, tools, algorithms
 from pandas import DataFrame
 from scipy.optimize import minimize_scalar
-from SREDT.utils import split_gini, print_if_verbose
+from SREDT.utils import split_gini
 from warnings import warn
 
 class SymbolicClassifier:
@@ -54,12 +54,15 @@ class SymbolicClassifier:
                 raise ValueError("function_set must be a set or iterable.")
         else:
             self.function_set = function_set
-        
+
+        # the gini cache is used to store the Gini impurity and best threshold for already evaluated individuals inside evalSplit
         self.gini_cache = dict()
+        # the gini_split_cache is used to store already threshold splits for a given individual inside findBestThreshold
         self.gini_split_cache = dict()
-        self.gini_cache_count = 0
-        self.gini_split_cache_count = 0
-        
+        if verbose >= 2:
+            self.gini_cache_count = 0
+            self.gini_split_cache_count = 0
+
         self.verbose = verbose
 
         self.random_state = random_state
@@ -146,6 +149,10 @@ class SymbolicClassifier:
         elif y == 0 and x < 0:
             return float('-inf')
         return operator.truediv(x, y)
+    
+    def print_if_verbose(self, verbose_level, *args, **kwargs):
+        if self.verbose >= verbose_level:
+            print(*args, **kwargs)
 
     def evalSplit(self, individual):
         computedHash = str(individual)
@@ -195,12 +202,12 @@ class SymbolicClassifier:
             """
             if not isinstance(threshold_i, int):
                 threshold_i = int(threshold_i)
-            result = self.gini_split_cache.get((threshold_i, computedHash))
+            result = self.gini_split_cache.get(threshold_i)
             if result is not None:
                 self.gini_split_cache_count += 1
                 return result
             result = split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:], nb_classes=self.nb_classes)
-            self.gini_split_cache[(threshold_i, computedHash)] = result
+            self.gini_split_cache[threshold_i] = result
             return result
 
         def gini_from_value(threshold):
@@ -235,7 +242,7 @@ class SymbolicClassifier:
             algorithms.eaMuPlusLambda(pop, self.toolbox, mu=population_size, lambda_=population_size, cxpb=0.5, mutpb=0.3, ngen=generations, verbose=False)
 
         # Save the best individual, its function and its optimal threshold
-        print_if_verbose(self.verbose, 2, f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
+        self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
         self.best = tools.selBest(pop, 1)[0]
         self.best_function = self.toolbox.compile(expr=self.best)
         if not self.arithmetic:
