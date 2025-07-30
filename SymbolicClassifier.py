@@ -4,7 +4,7 @@ from numpy import ndarray, array, searchsorted, argsort, isfinite, logical_not, 
 from deap import base, creator, gp, tools, algorithms
 from pandas import DataFrame
 from scipy.optimize import minimize_scalar
-from SREDT.utils import split_gini
+from SREDT.utils import split_gini, print_if_verbose
 from warnings import warn
 
 class SymbolicClassifier:
@@ -27,7 +27,7 @@ class SymbolicClassifier:
         findBestThreshold(function): Find the threshold that minimizes the Gini impurity of the split represented by the given function.
     """
 
-    def __init__(self, X, y, function_set=set(('add', 'mul')), algorithm='eaSimple', max_expression_height=3, arithmetic=True, random_state=41, nb_classes=None):
+    def __init__(self, X, y, function_set=set(('add', 'mul')), algorithm='eaSimple', max_expression_height=3, arithmetic=True, random_state=41, nb_classes=None, toolbox=None, verbose=2):
         if not isinstance(X, ndarray):
             if isinstance(X, DataFrame):
                 self.X = X.values
@@ -59,58 +59,72 @@ class SymbolicClassifier:
         self.gini_split_cache = dict()
         self.gini_cache_count = 0
         self.gini_split_cache_count = 0
+        
+        self.verbose = verbose
 
         self.random_state = random_state
         self.algorithm = algorithm
         self.max_expression_height = max_expression_height
         self.arithmetic = arithmetic
-        if self.arithmetic:
-            self.pset = gp.PrimitiveSetTyped("main", [float for _ in range(self.X.shape[1])], float)
+        if toolbox is not None:
+            self.toolbox = toolbox
+        else:
+            self.toolbox = self.make_toolbox(function_set, max_expression_height, self.X.shape[1], arithmetic=arithmetic)
+        self.toolbox.register("evaluate", self.evalSplit)
+        
+    
+    @staticmethod
+    def make_toolbox(function_set, max_expression_height, nb_args, arithmetic=True):
+        """
+        Create a DEAP toolbox with the given function set and maximum expression height.
+        """
+        if arithmetic:
+            pset = gp.PrimitiveSetTyped("main", [float for _ in range(nb_args)], float)
             if 'add' in function_set:
-                self.pset.addPrimitive(operator.add, [float, float], float)
+                pset.addPrimitive(operator.add, [float, float], float)
             if 'mul' in function_set:
-                self.pset.addPrimitive(operator.mul, [float, float], float)
+                pset.addPrimitive(operator.mul, [float, float], float)
             if 'square' in function_set:
-                self.pset.addPrimitive(self.square, [float], float)
+                pset.addPrimitive(SymbolicClassifier.square, [float], float)
             if 'sub' in function_set:
-                self.pset.addPrimitive(operator.sub, [float, float], float)
+                pset.addPrimitive(operator.sub, [float, float], float)
             if 'div' in function_set:
-                self.pset.addPrimitive(self.div, [float, float], float)
+                pset.addPrimitive(SymbolicClassifier.div, [float, float], float)
             if 'sqrt' in function_set:
-                self.pset.addPrimitive(self.sqrt, [float], float)
+                pset.addPrimitive(SymbolicClassifier.sqrt, [float], float)
 
         else:
-            self.pset = gp.PrimitiveSetTyped("main", [bool for _ in range(self.X.shape[1])], bool)
+            pset = gp.PrimitiveSetTyped("main", [bool for _ in range(nb_args)], bool)
             if 'and' in function_set:
-                self.pset.addPrimitive(operator.and_, [bool, bool], bool)
+                pset.addPrimitive(operator.and_, [bool, bool], bool)
             if 'or' in function_set:
-                self.pset.addPrimitive(operator.or_, [bool, bool], bool)
+                pset.addPrimitive(operator.or_, [bool, bool], bool)
             if 'not' in function_set:
-                self.pset.addPrimitive(logical_not, [bool], bool)
+                pset.addPrimitive(logical_not, [bool], bool)
             if 'xor' in function_set:
-                self.pset.addPrimitive(operator.xor, [bool, bool], bool)
-                    
+                pset.addPrimitive(operator.xor, [bool, bool], bool)
+
         if not hasattr(creator, "FitnessMin"):
             creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
         if not hasattr(creator, "Individual"):
             creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
 
         # Create the toolbox and register the genetic programming operations
-        self.toolbox = base.Toolbox()
-        self.toolbox.register("expr", gp.genHalfAndHalf, pset=self.pset, min_=1, max_=min(self.max_expression_height, 3))
-        self.toolbox.register("individual", tools.initIterate, creator.Individual, self.toolbox.expr)
-        self.toolbox.register("population", tools.initRepeat, list, self.toolbox.individual)
-        self.toolbox.register("compile", gp.compile, pset=self.pset)
-        self.toolbox.register("evaluate", self.evalSplit)
-        self.toolbox.register("select", tools.selTournament, tournsize=3)
-        self.toolbox.register("mate", gp.cxOnePoint)
-        self.toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
-        self.toolbox.register("mutate", gp.mutUniform, expr=self.toolbox.expr_mut, pset=self.pset)
+        toolbox = base.Toolbox()
+        toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=min(max_expression_height, 3))
+        toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+        toolbox.register("compile", gp.compile, pset=pset)
+        toolbox.register("select", tools.selTournament, tournsize=3)
+        toolbox.register("mate", gp.cxOnePoint)
+        toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
+        toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
         
         # Limit the expression length by limiting the height of the tree
-        self.toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=self.max_expression_height))
-        self.toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=self.max_expression_height))
-
+        toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
+        toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
+        return toolbox
+    
     @staticmethod
     def square(x):
         return operator.pow(x, 2)
@@ -221,7 +235,7 @@ class SymbolicClassifier:
             algorithms.eaMuPlusLambda(pop, self.toolbox, mu=population_size, lambda_=population_size, cxpb=0.5, mutpb=0.3, ngen=generations, verbose=False)
 
         # Save the best individual, its function and its optimal threshold
-        print(f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
+        print_if_verbose(self.verbose, 2, f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
         self.best = tools.selBest(pop, 1)[0]
         self.best_function = self.toolbox.compile(expr=self.best)
         if not self.arithmetic:
@@ -231,6 +245,5 @@ class SymbolicClassifier:
             computedHash = str(self.best)
             self.threshold, self.final_gini = self.gini_cache.get(computedHash, (None, None))
             if self.threshold is None:
-                print("Best not in cache")
                 self.threshold, self.final_gini = self.findBestThreshold(self.best_function, self.best)
         self.gini_cache.clear()
