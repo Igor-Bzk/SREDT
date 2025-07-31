@@ -162,7 +162,7 @@ class SREDTClassifier:
             # the max number of threads running at the same time is the number of nodes in the tree of parallelization_height
             # plus max_depth - parallelization_height as parallelization_height is increased as leaves are made
             # so we need to account for nodes from the top of the tree to the root of the parallelized subtree
-            thread_executor = ThreadPoolExecutor(max_workers=(2**self.parallelization_height + 1) - 1 + self.max_depth - self.parallelization_height)
+            thread_executor = ThreadPoolExecutor(max_workers=2**(self.parallelization_height + 1) - 1 + self.max_depth - self.parallelization_height)
             height_lock = Lock()
             
         SR_params = {
