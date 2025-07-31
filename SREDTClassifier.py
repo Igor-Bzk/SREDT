@@ -143,10 +143,10 @@ class SREDTClassifier(BaseEstimator):
             except TypeError:
                 raise ValueError("function_set must be a set or iterable.")
         
-        # Check if the function set contains arithmetic_ or logical functions
+        # Check if the function set contains arithmetic or logical functions
         if self.function_set & {'add', 'mul', 'square', 'sub', 'div', 'sqrt'}:
             if self.function_set & {'and', 'or', 'not', 'xor'}:
-                raise ValueError("Arithmetic_ and logical functions cannot be mixed in the function set.")
+                raise ValueError("Arithmetic and logical functions cannot be mixed in the function set.")
             self.arithmetic_ = True
         else:
             self.arithmetic_ = False
@@ -155,9 +155,11 @@ class SREDTClassifier(BaseEstimator):
 
         self._estimator_type = "classifier"
         
-        self.parallelization_height_ = ceil(log2(self.nb_processes))
-        self.initial_parallelization_height_ = self.parallelization_height_
+        # parallelization_depth_ is the number of levels of the tree that get parallelized
+        self.parallelization_depth_ = ceil(log2(self.nb_processes))
+        self.initial_parallelization_depth_ = self.parallelization_depth_
         
+        # we avoid using an LabelEncoder if the labels are already integers
         if not issubdtype(y.dtype, int):
             self.print_if_verbose(2, "Using label encoding.")
             self.label_encoder_ = LabelEncoder()
@@ -174,15 +176,15 @@ class SREDTClassifier(BaseEstimator):
         
         
         # Initialize the executor for parallel processing if parallelization is enabled
-        if self.parallelization_height_ > 0:
+        if self.parallelization_depth_ > 0:
             global executor
-            if executor is None:
-                # the max number of processes running at the same time is the number of leaves in the tree of parallelization_height_
-                executor = ProcessPoolExecutor(max_workers=self.nb_processes)
-            # the max number of threads running at the same time is the number of nodes in the tree of parallelization_height_
-            # plus max_depth - parallelization_height_ as parallelization_height_ is increased as leaves are made
+            # the max number of processes running at the same time is the number of leaves in the tree of parallelization_depth_
+            executor = ProcessPoolExecutor(max_workers=self.nb_processes)
+            
+            # the max number of threads running at the same time is the number of nodes in the tree of parallelization_depth_
+            # plus max_depth - parallelization_depth_ as parallelization_depth_ is increased as leaves are made
             # so we need to account for nodes from the top of the tree to the root of the parallelized subtree
-            thread_executor = ThreadPoolExecutor(max_workers=2**(self.parallelization_height_ + 1) - 1 + self.max_depth - self.parallelization_height_)
+            thread_executor = ThreadPoolExecutor(max_workers=2**(self.parallelization_depth_ + 1) - 1 + self.max_depth - self.parallelization_depth_)
             height_lock = Lock()
             
         SR_params = {
@@ -199,15 +201,15 @@ class SREDTClassifier(BaseEstimator):
                 class_distribution = bincount(y, minlength=self.n_classes_)
                 majority_class = class_distribution.argmax()
                 self.print_if_verbose(1, f"Leaf at depth {depth} with majority class: {majority_class} at predominance: {class_distribution[majority_class]/len(y)}")
-                if self.parallelization_height_ > 0:
-                    if depth < self.parallelization_height_ - self.initial_parallelization_height_:
+                if self.parallelization_depth_ > 0:
+                    if depth < self.parallelization_depth_ - self.initial_parallelization_depth_:
                         warn("Leaf made above parallelization root")
                     else:
                         with height_lock:
                             # leaves liberate resources so parallelization height can be increased
                             # in a way to keep the number of processes running at the same time constant
                             # being equivalent to making the parallelized subtree start on deeper levels
-                            self.parallelization_height_ += 2**(int(self.parallelization_height_ - self.initial_parallelization_height_) - depth + 1)
+                            self.parallelization_depth_ += 2**(int(self.parallelization_depth_ - self.initial_parallelization_depth_) - depth + 1)
                 return SREDT_leaf(majority_class=majority_class)
             
             # make a leaf if there are no samples left or if the maximum depth is reached
@@ -217,7 +219,7 @@ class SREDTClassifier(BaseEstimator):
 
             # evaluating the symbolic regression classifier is done in a separate process
             # as it is the most expensive operation that benefits from being parallelized
-            if depth > 0 and self.parallelization_height_ > 0:
+            if depth > 0 and self.parallelization_depth_ > 0:
                 SR = executor.submit(evalSRClf, X, y, SR_params, self.generations, self.population_size)
                 best, threshold, final_gini = SR.result()
             else:
@@ -236,16 +238,16 @@ class SREDTClassifier(BaseEstimator):
                 return make_leaf()
             
             
-            if self.parallelization_height_ > 0:
+            if self.parallelization_depth_ > 0:
                 with height_lock:
-                    current_parallelization_height = self.parallelization_height_
-                self.print_if_verbose(2, f"Current parallelization height: {current_parallelization_height}")
+                    current_parallelization_depth = self.parallelization_depth_
+                self.print_if_verbose(2, f"Current parallelization height: {current_parallelization_depth}")
             else:
-                current_parallelization_height = 0
+                current_parallelization_depth = 0
             
             # if the current depth is less than the parallelization height, run the left and right branches in parallel
-            # this allows to parallelize the training of the SR classifiers
-            if depth <= current_parallelization_height - 1:
+            # this allows to parallelize the training of the SR classifiers without getting over the max process number
+            if depth <= current_parallelization_depth - 1:
                 left_future = thread_executor.submit(build_SREDT, left, left_labels, depth + 1)
                 right_future = thread_executor.submit(build_SREDT, right, right_labels, depth + 1)
                 left = left_future.result()
@@ -258,6 +260,9 @@ class SREDTClassifier(BaseEstimator):
             self.root_ = build_SREDT(X, y_enc)
         else:
             self.root_ = build_SREDT(X, y)
+        
+        thread_executor.shutdown(wait=True)
+        executor.shutdown(wait=True)
         return self
     
     def print_if_verbose(self, verbose_level, *args, **kwargs):
