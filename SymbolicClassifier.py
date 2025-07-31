@@ -59,9 +59,8 @@ class SymbolicClassifier:
         self.gini_cache = dict()
         # the gini_split_cache is used to store already threshold splits for a given individual inside findBestThreshold
         self.gini_split_cache = dict()
-        if verbose >= 2:
-            self.gini_cache_count = 0
-            self.gini_split_cache_count = 0
+        self.gini_cache_count = 0
+        self.gini_split_cache_count = 0
 
         self.verbose = verbose
 
@@ -158,7 +157,8 @@ class SymbolicClassifier:
         computedHash = str(individual)
         cached_result = self.gini_cache.get(computedHash)
         if cached_result is not None:
-            self.gini_cache_count += 1
+            if self.verbose >= 2:
+                self.gini_cache_count += 1
             if self.arithmetic:
                 return (cached_result[1],)
             return cached_result,
@@ -204,7 +204,8 @@ class SymbolicClassifier:
                 threshold_i = int(threshold_i)
             result = self.gini_split_cache.get(threshold_i)
             if result is not None:
-                self.gini_split_cache_count += 1
+                if self.verbose >= 2:
+                    self.gini_split_cache_count += 1
                 return result
             result = split_gini(sorted_labels[:threshold_i+1], sorted_labels[threshold_i+1:], nb_classes=self.nb_classes)
             self.gini_split_cache[threshold_i] = result
