@@ -1,4 +1,4 @@
-from numpy import array, sum, bincount 
+from numpy import array, sum, bincount
 
 def gini(y_subset, nb_classes=None):
     if len(y_subset) == 0:
@@ -80,18 +80,72 @@ def readable_deap_function(expr):
     return node_to_str(parse_tree(expr)[0])
 
 def pickle(clf, filename):
-    from dill import dump
+    from pickle import dump
+    from SREDT.SREDTClassifier import SREDT_leaf
+    
+    params = clf.get_params()
+
+    def node_to_dict(node):
+        if isinstance(node, SREDT_leaf):
+            return dict(majority_class=node.majority_class)
+        
+        return dict(
+            threshold=node.threshold,
+            left=node_to_dict(node.left),
+            right=node_to_dict(node.right),
+            uncompiled_function=str(node.uncompiled_function),
+        )
+
+    root = node_to_dict(clf.root_)
+    extra_attributes = {
+        'arithmetic_': clf.arithmetic_,
+        'n_features_in_': clf.n_features_in_,
+    }
+    
     with open(filename, 'wb') as f:
-        dump(clf, f)
+        dump((root, params, extra_attributes), f)
 
 def unpickle(filename):
+    from SREDT.SREDTClassifier import SREDT_node, SREDT_leaf
     # The creator has to be created and have attributes set before loading the classifier if that's not already done.
-    from deap import creator, base, gp
-    if not hasattr(creator, "FitnessMin"):
-        creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
-    if not hasattr(creator, "Individual"):
-        creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
+    from pickle import load
     
-    from dill import load
-    with open(filename, 'rb') as f:
-        return load(f)
+    try:
+        with open(filename, 'rb') as f:
+            clf = load(f)
+    except:
+        from dill import load as dl_load
+        from deap import creator,base, gp
+        if not hasattr(creator, 'FitnessMin'):
+            creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+        if not hasattr(creator, 'Individual'):
+            creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
+        with open(filename, 'rb') as f:
+            return dl_load(f)
+    
+    from SREDT.SymbolicClassifier import make_toolbox
+    from deap.gp import PrimitiveTree
+    from SREDT import SREDTClassifier
+    if not isinstance(clf,tuple):
+        return clf
+    
+    root, params, extra_attributes = clf
+    reconstructed_clf = SREDTClassifier(params)
+    toolbox = make_toolbox(params['function_set'], params['max_expression_height'], extra_attributes['n_features_in_'], arithmetic=extra_attributes['arithmetic_'])
+
+    def dict_to_node(d):
+        try:
+            return SREDT_leaf(majority_class=d['majority_class'])
+        except KeyError:    
+            uncompiled_tree = PrimitiveTree.from_string(d['uncompiled_function'], pset=toolbox.pset)
+            return SREDT_node(
+                function=toolbox.compile(expr=uncompiled_tree),
+                threshold=d.get('threshold'),
+                left=dict_to_node(d['left']),
+                right=dict_to_node(d['right']),
+                uncompiled_function=uncompiled_tree,
+                arithmetic=extra_attributes['arithmetic_']
+            )
+
+    reconstructed_clf.root_ = dict_to_node(root)
+    return reconstructed_clf

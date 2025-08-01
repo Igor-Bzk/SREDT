@@ -7,6 +7,58 @@ from scipy.optimize import minimize_scalar
 from SREDT.utils import split_gini
 from warnings import warn
 
+def make_toolbox(function_set, max_expression_height, nb_args, arithmetic=True):
+        """
+        Create a DEAP toolbox with the given function set and maximum expression height.
+        """
+        if arithmetic:
+            pset = gp.PrimitiveSetTyped("main", [float for _ in range(nb_args)], float)
+            if 'add' in function_set:
+                pset.addPrimitive(operator.add, [float, float], float)
+            if 'mul' in function_set:
+                pset.addPrimitive(operator.mul, [float, float], float)
+            if 'square' in function_set:
+                pset.addPrimitive(SymbolicClassifier.square, [float], float)
+            if 'sub' in function_set:
+                pset.addPrimitive(operator.sub, [float, float], float)
+            if 'div' in function_set:
+                pset.addPrimitive(SymbolicClassifier.div, [float, float], float)
+            if 'sqrt' in function_set:
+                pset.addPrimitive(SymbolicClassifier.sqrt, [float], float)
+
+        else:
+            pset = gp.PrimitiveSetTyped("main", [bool for _ in range(nb_args)], bool)
+            if 'and' in function_set:
+                pset.addPrimitive(operator.and_, [bool, bool], bool)
+            if 'or' in function_set:
+                pset.addPrimitive(operator.or_, [bool, bool], bool)
+            if 'not' in function_set:
+                pset.addPrimitive(logical_not, [bool], bool)
+            if 'xor' in function_set:
+                pset.addPrimitive(operator.xor, [bool, bool], bool)
+
+        if "FitnessMin" not in creator.__dict__:
+            creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
+        if "Individual" not in creator.__dict__:
+            creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
+
+        # Create the toolbox and register the genetic programming operations
+        toolbox = base.Toolbox()
+        toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=min(max_expression_height, 3))
+        toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
+        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+        toolbox.register("compile", gp.compile, pset=pset)
+        toolbox.register("select", tools.selTournament, tournsize=3)
+        toolbox.register("mate", gp.cxOnePoint)
+        toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
+        toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
+        toolbox.pset = pset
+        
+        # Limit the expression length by limiting the height of the tree
+        toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
+        toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
+        return toolbox
+
 class SymbolicClassifier:
     """
     A classifier using genetic programming to evolve a symbolic expression
@@ -71,61 +123,9 @@ class SymbolicClassifier:
         if toolbox is not None:
             self.toolbox = toolbox
         else:
-            self.toolbox = self.make_toolbox(function_set, max_expression_height, self.X.shape[1], arithmetic=arithmetic)
+            self.toolbox = make_toolbox(function_set, max_expression_height, self.X.shape[1], arithmetic=arithmetic)
         self.toolbox.register("evaluate", self.evalSplit)
         
-    
-    @staticmethod
-    def make_toolbox(function_set, max_expression_height, nb_args, arithmetic=True):
-        """
-        Create a DEAP toolbox with the given function set and maximum expression height.
-        """
-        if arithmetic:
-            pset = gp.PrimitiveSetTyped("main", [float for _ in range(nb_args)], float)
-            if 'add' in function_set:
-                pset.addPrimitive(operator.add, [float, float], float)
-            if 'mul' in function_set:
-                pset.addPrimitive(operator.mul, [float, float], float)
-            if 'square' in function_set:
-                pset.addPrimitive(SymbolicClassifier.square, [float], float)
-            if 'sub' in function_set:
-                pset.addPrimitive(operator.sub, [float, float], float)
-            if 'div' in function_set:
-                pset.addPrimitive(SymbolicClassifier.div, [float, float], float)
-            if 'sqrt' in function_set:
-                pset.addPrimitive(SymbolicClassifier.sqrt, [float], float)
-
-        else:
-            pset = gp.PrimitiveSetTyped("main", [bool for _ in range(nb_args)], bool)
-            if 'and' in function_set:
-                pset.addPrimitive(operator.and_, [bool, bool], bool)
-            if 'or' in function_set:
-                pset.addPrimitive(operator.or_, [bool, bool], bool)
-            if 'not' in function_set:
-                pset.addPrimitive(logical_not, [bool], bool)
-            if 'xor' in function_set:
-                pset.addPrimitive(operator.xor, [bool, bool], bool)
-
-        if not hasattr(creator, "FitnessMin"):
-            creator.create("FitnessMin", base.Fitness, weights=(-1.0,))
-        if not hasattr(creator, "Individual"):
-            creator.create("Individual", gp.PrimitiveTree, fitness=creator.FitnessMin)
-
-        # Create the toolbox and register the genetic programming operations
-        toolbox = base.Toolbox()
-        toolbox.register("expr", gp.genHalfAndHalf, pset=pset, min_=1, max_=min(max_expression_height, 3))
-        toolbox.register("individual", tools.initIterate, creator.Individual, toolbox.expr)
-        toolbox.register("population", tools.initRepeat, list, toolbox.individual)
-        toolbox.register("compile", gp.compile, pset=pset)
-        toolbox.register("select", tools.selTournament, tournsize=3)
-        toolbox.register("mate", gp.cxOnePoint)
-        toolbox.register("expr_mut", gp.genFull, min_=0, max_=2)
-        toolbox.register("mutate", gp.mutUniform, expr=toolbox.expr_mut, pset=pset)
-        
-        # Limit the expression length by limiting the height of the tree
-        toolbox.decorate("mate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
-        toolbox.decorate("mutate", gp.staticLimit(key=operator.attrgetter("height"), max_value=max_expression_height))
-        return toolbox
     
     @staticmethod
     def square(x):
@@ -171,7 +171,7 @@ class SymbolicClassifier:
                 left_mask = array([func(*features) for features in self.X], dtype=bool)
             right_mask = ~left_mask
             gini_results = split_gini(self.y[left_mask], self.y[right_mask], nb_classes=self.nb_classes)
-            self.gini_cache[computedHash] = gini_results,
+            self.gini_cache[computedHash] = gini_results
             return gini_results,
         _, best_gini = self.findBestThreshold(func, individual, computedHash=computedHash)
         return (best_gini,)
@@ -243,7 +243,7 @@ class SymbolicClassifier:
             algorithms.eaMuPlusLambda(pop, self.toolbox, mu=population_size, lambda_=population_size, cxpb=0.5, mutpb=0.3, ngen=generations, verbose=False)
 
         # Save the best individual, its function and its optimal threshold
-        self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
+        self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}{"" if not self.arithmetic else f", Threshold search cache hits: {self.gini_split_cache_count}" }")
         self.best = tools.selBest(pop, 1)[0]
         self.best_function = self.toolbox.compile(expr=self.best)
         if not self.arithmetic:

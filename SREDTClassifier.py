@@ -1,4 +1,4 @@
-from SREDT.SymbolicClassifier import SymbolicClassifier
+from SREDT.SymbolicClassifier import SymbolicClassifier, make_toolbox
 from SREDT.utils import gini, splitSetOnFunction, readable_deap_function
 from numpy import ndarray, array, stack, bincount, max, empty, log2, ceil, issubdtype
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -7,6 +7,7 @@ from threading import Lock
 from sklearn.utils.validation import check_is_fitted, validate_data
 from sklearn.preprocessing import LabelEncoder
 from warnings import warn
+from graphviz import Digraph
 
 executor = None
 class SREDT_node:
@@ -57,13 +58,20 @@ class SREDT_node:
             return self.left(*args) if not rep else self.right(*args)
         return self.left(*args) if not rep > self.threshold else self.right(*args)
 
-    def __str__(self, depth=0):
+    def __str__(self):
         if self.arithmetic:
-            s = f"{depth * '  '}Node: {readable_deap_function(self.uncompiled_function)} > {self.threshold}\n"
+            return f"Node: {readable_deap_function(self.uncompiled_function)} > {self.threshold}\n"
         else:
-            s = f"{depth * '  '}Node: {readable_deap_function(self.uncompiled_function)}\n"
-        s += self.left.__str__(depth + 1)
-        s += self.right.__str__(depth + 1)
+            return f"Node: {readable_deap_function(self.uncompiled_function)}\n"
+
+    def subtree_to_string(self, depth=0):
+        """
+        Returns a string representation of the subtree rooted at this node.
+        """
+
+        s = f"{depth * '  '} {str(self)}"
+        s += self.left.subtree_to_string(depth + 1) if isinstance(self.left, SREDT_node) else self.left.__str__(depth + 1)
+        s += self.right.subtree_to_string(depth + 1) if isinstance(self.right, SREDT_node) else self.right.__str__(depth + 1)
         return s
 
 class SREDT_leaf:
@@ -134,7 +142,6 @@ class SREDTClassifier(BaseEstimator):
         self.cost_complexity_threshold = cost_complexity_threshold
         self.nb_processes = nb_processes
         
-
     def fit(self, X, y):
 
         if not isinstance(self.function_set, set):
@@ -170,11 +177,11 @@ class SREDTClassifier(BaseEstimator):
             if hasattr(self, 'label_encoder_'):
                 self.label_encoder_ = None
             self.n_classes_ = max(y) + 1 if isinstance(y, ndarray) else max(y.values) + 1
-
+        
         # we create a toolbox in the SREDTClassifier in order to be able to compile the function outside of the classifier
-        toolbox = SymbolicClassifier.make_toolbox(self.function_set, self.max_expression_height, X.shape[1], arithmetic=self.arithmetic_)
-        
-        
+        toolbox = make_toolbox(self.function_set, self.max_expression_height, self.n_features_in_, arithmetic=self.arithmetic_)
+
+
         # Initialize the executor for parallel processing if parallelization is enabled
         if self.parallelization_depth_ > 0:
             global executor
@@ -228,7 +235,6 @@ class SREDTClassifier(BaseEstimator):
             # the function is compiled outside the classifier as it is a lambda that cannot be pickled and returned by a process
             best_function = toolbox.compile(expr=best)
 
-            
             left, right, left_labels, right_labels = splitSetOnFunction(best_function, X, y, threshold)
 
             self.print_if_verbose(1, f"Depth: {depth}, Gini: {y_gini}, Left: {len(left_labels)}, Right: {len(right_labels)}")
@@ -261,8 +267,9 @@ class SREDTClassifier(BaseEstimator):
         else:
             self.root_ = build_SREDT(X, y)
         
-        thread_executor.shutdown(wait=True)
-        executor.shutdown(wait=True)
+        if self.parallelization_depth_ > 0:
+            thread_executor.shutdown(wait=True)
+            executor.shutdown(wait=True)
         return self
     
     def print_if_verbose(self, verbose_level, *args, **kwargs):
@@ -277,4 +284,17 @@ class SREDTClassifier(BaseEstimator):
         return self.root_(*X.T)
 
     def __str__(self):
-        return self.root_.__str__()
+        return self.root_.subtree_to_string()
+
+    def display(self, filepath="tree"):
+        dot = Digraph("Tree", comment="Decision tree representation", format="png")
+
+        def _add_nodes(dot, node):
+            dot.node(str(id(node)), label=str(node))
+            if isinstance(node, SREDT_node):
+                dot.edge(str(id(node)), str(id(node.left)), label="False")
+                _add_nodes(dot, node.left)
+                dot.edge(str(id(node)), str(id(node.right)), label="True")
+                _add_nodes(dot, node.right)
+        _add_nodes(dot, self.root_)
+        dot.render(filepath, format="png", cleanup=True)
