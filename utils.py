@@ -1,10 +1,14 @@
 from numpy import array, sum, bincount
 
-def gini(y_subset, nb_classes=None):
+def gini(y_subset, nb_classes=None, distribution=False):
     if len(y_subset) == 0:
+        if distribution:
+            return 0.0, array([])
         return 0.0
     counts = bincount(y_subset, minlength=nb_classes) if nb_classes is not None else bincount(y_subset)
     probs = counts / len(y_subset)
+    if distribution:
+        return 1.0 - sum(probs ** 2), counts
     return 1.0 - sum(probs ** 2)
 
 def split_gini(y_left, y_right, nb_classes=None):
@@ -72,8 +76,6 @@ def readable_deap_function(expr):
             return f"({node_to_str(node.args[0])} / {node_to_str(node.args[1])})"
         elif isinstance(node.name, str) and node.name.startswith('ARG'):
             return node.name
-        elif node.name == 'True':
-            return "True"
         else:
             return str(node.name)
         
@@ -87,13 +89,19 @@ def pickle(clf, filename):
 
     def node_to_dict(node):
         if isinstance(node, SREDT_leaf):
-            return dict(majority_class=node.majority_class)
-        
+            return dict(
+                majority_class=node.majority_class,
+                gini=node.gini if hasattr(node, 'gini') else None,
+                class_distribution=node.class_distribution if hasattr(node, 'class_distribution') else None,
+            )
+
         return dict(
             threshold=node.threshold,
             left=node_to_dict(node.left),
             right=node_to_dict(node.right),
             uncompiled_function=str(node.uncompiled_function),
+            gini=node.gini if hasattr(node, 'gini') else None,
+            class_distribution=node.class_distribution if hasattr(node, 'class_distribution') else None
         )
 
     root = node_to_dict(clf.root_)
@@ -135,8 +143,8 @@ def unpickle(filename):
 
     def dict_to_node(d):
         try:
-            return SREDT_leaf(majority_class=d['majority_class'])
-        except KeyError:    
+            return SREDT_leaf(majority_class=d['majority_class'], gini=d.get('gini'), class_distribution=d.get('class_distribution'))
+        except KeyError:
             uncompiled_tree = PrimitiveTree.from_string(d['uncompiled_function'], pset=toolbox.pset)
             return SREDT_node(
                 function=toolbox.compile(expr=uncompiled_tree),
@@ -144,7 +152,9 @@ def unpickle(filename):
                 left=dict_to_node(d['left']),
                 right=dict_to_node(d['right']),
                 uncompiled_function=uncompiled_tree,
-                arithmetic=extra_attributes['arithmetic_']
+                arithmetic=extra_attributes['arithmetic_'],
+                gini=d.get('gini'),
+                class_distribution=d.get('class_distribution')
             )
 
     reconstructed_clf.root_ = dict_to_node(root)

@@ -1,6 +1,6 @@
 from SREDT.SymbolicClassifier import SymbolicClassifier, make_toolbox
 from SREDT.utils import gini, splitSetOnFunction, readable_deap_function
-from numpy import ndarray, array, stack, bincount, max, empty, log2, ceil, issubdtype
+from numpy import ndarray, array, stack, bincount, max, empty, log2, ceil, issubdtype, nonzero
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 from sklearn.base import BaseEstimator
 from threading import Lock
@@ -19,13 +19,15 @@ class SREDT_node:
         left: The left child node.
         right: The right child node.
     """
-    def __init__(self, function, threshold, uncompiled_function, left, right, arithmetic):
+    def __init__(self, function, threshold, uncompiled_function, left, right, arithmetic, gini=None, class_distribution=None):
         self.function = function
         self.threshold = threshold
         self.uncompiled_function = uncompiled_function
         self.left = left
         self.right = right
         self.arithmetic = arithmetic
+        self.gini = gini
+        self.class_distribution = class_distribution
 
     def __call__(self, *args):
         """
@@ -60,7 +62,7 @@ class SREDT_node:
 
     def __str__(self):
         if self.arithmetic:
-            return f"Node: {readable_deap_function(self.uncompiled_function)} > {self.threshold}\n"
+            return f"Node: {readable_deap_function(self.uncompiled_function)} > {self.threshold:.4f}\n"
         else:
             return f"Node: {readable_deap_function(self.uncompiled_function)}\n"
 
@@ -74,14 +76,29 @@ class SREDT_node:
         s += self.right.subtree_to_string(depth + 1) if isinstance(self.right, SREDT_node) else self.right.__str__(depth + 1)
         return s
 
+    def details(self):
+        """
+        Returns a detailed string representation of the node, including Gini impurity and class distribution.
+        """
+        s = ""
+        if self.gini is not None:
+            s += f"Gini: {self.gini:.4f}\n"
+        if self.class_distribution is not None:
+            s += "Training class distribution:\n"
+            for key, value in self.class_distribution.items():
+                s += f"Class {key}: {value}\n"
+        return s
+
 class SREDT_leaf:
     """
     A leaf node in the symbolic regression decision tree.
     Attributes:
         majority_class: The majority class label for the leaf node.
     """
-    def __init__(self, majority_class):
+    def __init__(self, majority_class, gini=None, class_distribution=None):
         self.majority_class = majority_class
+        self.gini = gini
+        self.class_distribution = class_distribution
 
     def __call__(self, *args):
         """
@@ -90,8 +107,22 @@ class SREDT_leaf:
         if isinstance(args, ndarray):
             return array([self.majority_class for _ in range(args.shape[0])])
         return self.majority_class
+    
     def __str__(self, depth=0):
-        return f"{depth * '  '}Leaf: {self.majority_class}\n"
+        return f"{depth * '  '}Leaf: Class {self.majority_class}\n"
+    
+    def details(self):
+        """
+        Returns a detailed string representation of the leaf node, including Gini impurity and class distribution.
+        """
+        s = ""
+        if self.gini is not None:
+            s += f"Gini: {self.gini:.4f}\n"
+        if self.class_distribution is not None:
+            s += "Class distribution during training:\n"
+            for key, value in self.class_distribution.items():
+                s += f"Class {key}: {value}\n"
+        return s
 
 def evalSRClf(X,y, SR_params, generations, population_size):
     """ Evaluate the symbolic regression classifier on the given data.
@@ -202,12 +233,15 @@ class SREDTClassifier(BaseEstimator):
                 'arithmetic': self.arithmetic_,
                 'verbose': self.verbose,
             }
-        
+
         def build_SREDT(X, y, depth=0):
-            def make_leaf():
-                class_distribution = bincount(y, minlength=self.n_classes_)
+            def make_leaf(gini=None, class_distribution=None, class_distribution_dict=None):
+                if class_distribution is None:
+                    class_distribution = bincount(y, minlength=self.n_classes_)
                 majority_class = class_distribution.argmax()
                 self.print_if_verbose(1, f"Leaf at depth {depth} with majority class: {majority_class} at predominance: {class_distribution[majority_class]/len(y)}")
+                if hasattr(self, 'label_encoder_') and self.label_encoder_ is not None:
+                    majority_class = self.label_encoder_.inverse_transform([majority_class])[0]
                 if self.parallelization_depth_ > 0:
                     if depth < self.parallelization_depth_ - self.initial_parallelization_depth_:
                         warn("Leaf made above parallelization root")
@@ -217,12 +251,17 @@ class SREDTClassifier(BaseEstimator):
                             # in a way to keep the number of processes running at the same time constant
                             # being equivalent to making the parallelized subtree start on deeper levels
                             self.parallelization_depth_ += 2**(int(self.parallelization_depth_ - self.initial_parallelization_depth_) - depth + 1)
-                return SREDT_leaf(majority_class=majority_class)
+                return SREDT_leaf(majority_class=majority_class, gini=gini, class_distribution=class_distribution_dict)
             
             # make a leaf if there are no samples left or if the maximum depth is reached
-            y_gini = gini(y, nb_classes=self.n_classes_)
+            y_gini, class_distribution = gini(y, nb_classes=self.n_classes_, distribution=True)
+            non_zero_classes = nonzero(class_distribution)[0]
+            if hasattr(self, 'label_encoder_') and self.label_encoder_ is not None:
+                class_distribution_dict = dict(zip(self.label_encoder_.inverse_transform(non_zero_classes), class_distribution[non_zero_classes]))
+            else:
+                class_distribution_dict = dict(zip(non_zero_classes, class_distribution[non_zero_classes]))
             if y_gini < 0.1 or depth >= self.max_depth:
-                return make_leaf()
+                return make_leaf(gini=y_gini, class_distribution=class_distribution, class_distribution_dict=class_distribution_dict)
 
             # evaluating the symbolic regression classifier is done in a separate process
             # as it is the most expensive operation that benefits from being parallelized
@@ -241,9 +280,8 @@ class SREDTClassifier(BaseEstimator):
 
             # make a leaf if one of the sides is empty or if the split does not improve the Gini impurity significantly
             if len(left_labels) == 0 or len(right_labels) == 0 or (self.cost_complexity_threshold is not None and (y_gini - final_gini < self.cost_complexity_threshold)):
-                return make_leaf()
-            
-            
+                return make_leaf(gini=y_gini, class_distribution=class_distribution, class_distribution_dict=class_distribution_dict)
+
             if self.parallelization_depth_ > 0:
                 with height_lock:
                     current_parallelization_depth = self.parallelization_depth_
@@ -258,10 +296,10 @@ class SREDTClassifier(BaseEstimator):
                 right_future = thread_executor.submit(build_SREDT, right, right_labels, depth + 1)
                 left = left_future.result()
                 right = right_future.result()
-                return SREDT_node(best_function, threshold, best, left, right, self.arithmetic_)
+                return SREDT_node(best_function, threshold, best, left, right, self.arithmetic_, gini=y_gini, class_distribution=class_distribution_dict)
             else:
-                return SREDT_node(best_function, threshold, best, build_SREDT(left, left_labels, depth + 1), build_SREDT(right, right_labels, depth + 1), self.arithmetic_)
-            
+                return SREDT_node(best_function, threshold, best, build_SREDT(left, left_labels, depth + 1), build_SREDT(right, right_labels, depth + 1), self.arithmetic_, gini=y_gini, class_distribution=class_distribution_dict)
+
         if not issubdtype(y.dtype, int):
             self.root_ = build_SREDT(X, y_enc)
         else:
@@ -279,18 +317,16 @@ class SREDTClassifier(BaseEstimator):
     def predict(self,X):
         X = validate_data(self, X, reset=False)
         check_is_fitted(self, 'root_')
-        if hasattr(self, 'label_encoder_') and self.label_encoder_ is not None:
-            return self.label_encoder_.inverse_transform(self.root_(*X.T))
         return self.root_(*X.T)
 
     def __str__(self):
         return self.root_.subtree_to_string()
 
-    def display(self, filepath="tree"):
+    def display(self, filepath="tree", details=True):
         dot = Digraph("Tree", comment="Decision tree representation", format="png")
 
         def _add_nodes(dot, node):
-            dot.node(str(id(node)), label=str(node))
+            dot.node(str(id(node)), label=f'{str(node)}{"" if not details else node.details()}', shape='box')
             if isinstance(node, SREDT_node):
                 dot.edge(str(id(node)), str(id(node.left)), label="False")
                 _add_nodes(dot, node.left)
