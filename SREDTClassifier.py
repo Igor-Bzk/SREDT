@@ -60,23 +60,23 @@ class SREDT_node:
             return self.left(*args) if not rep else self.right(*args)
         return self.left(*args) if not rep > self.threshold else self.right(*args)
 
-    def __str__(self):
+    def __str__(self, features=None):
         if self.arithmetic:
-            return f"Node: {readable_deap_function(self.uncompiled_function)} > {self.threshold:.4f}\n"
+            return f"Node: {readable_deap_function(self.uncompiled_function, features=features)} > {self.threshold:.4f}\n"
         else:
-            return f"Node: {readable_deap_function(self.uncompiled_function)}\n"
+            return f"Node: {readable_deap_function(self.uncompiled_function, features=features)}\n"
 
-    def subtree_to_string(self, depth=0):
+    def subtree_to_string(self, depth=0, features=None):
         """
         Returns a string representation of the subtree rooted at this node.
         """
 
-        s = f"{depth * '  '} {str(self)}"
-        s += self.left.subtree_to_string(depth + 1) if isinstance(self.left, SREDT_node) else self.left.__str__(depth + 1)
-        s += self.right.subtree_to_string(depth + 1) if isinstance(self.right, SREDT_node) else self.right.__str__(depth + 1)
+        s = f"{depth * '  '} {str(self, features=features)}"
+        s += self.left.subtree_to_string(depth + 1, features=features) if isinstance(self.left, SREDT_node) else self.left.__str__(depth + 1)
+        s += self.right.subtree_to_string(depth + 1, features=features) if isinstance(self.right, SREDT_node) else self.right.__str__(depth + 1)
         return s
 
-    def details(self):
+    def details(self, labels=None):
         """
         Returns a detailed string representation of the node, including Gini impurity and class distribution.
         """
@@ -86,7 +86,7 @@ class SREDT_node:
         if self.class_distribution is not None:
             s += "Training class distribution:\n"
             for key, value in self.class_distribution.items():
-                s += f"Class {key}: {value}\n"
+                s += f"Class {key}: {value}\n" if labels is None else f"Class {labels[key]}: {value}\n"
         return s
 
 class SREDT_leaf:
@@ -108,10 +108,10 @@ class SREDT_leaf:
             return array([self.majority_class for _ in range(args.shape[0])])
         return self.majority_class
     
-    def __str__(self, depth=0):
-        return f"{depth * '  '}Leaf: Class {self.majority_class}\n"
-    
-    def details(self):
+    def __str__(self, depth=0, labels=None):
+        return f"{depth * '  '}Leaf: Class {self.majority_class}\n" if labels is None else f"{depth * '  '}Leaf: Class {labels[self.majority_class]}\n"
+
+    def details(self, labels=None):
         """
         Returns a detailed string representation of the leaf node, including Gini impurity and class distribution.
         """
@@ -121,7 +121,7 @@ class SREDT_leaf:
         if self.class_distribution is not None:
             s += "Class distribution during training:\n"
             for key, value in self.class_distribution.items():
-                s += f"Class {key}: {value}\n"
+                s += f"Class {key}: {value}\n" if labels is None else f"Class {labels[key]}: {value}\n"
         return s
 
 def evalSRClf(X,y, SR_params, generations, population_size):
@@ -322,11 +322,11 @@ class SREDTClassifier(BaseEstimator):
     def __str__(self):
         return self.root_.subtree_to_string()
 
-    def display(self, filepath="tree", details=True):
+    def display(self, filepath="tree", details=True, features=None, labels=None):
         dot = Digraph("Tree", comment="Decision tree representation", format="png")
 
         def _add_nodes(dot, node):
-            dot.node(str(id(node)), label=f'{str(node)}{"" if not details else node.details()}', shape='box')
+            dot.node(str(id(node)), label=f'{node.__str__(labels=labels) if isinstance(node, SREDT_leaf) else node.__str__(features=features)}{"" if not details else node.details(labels=labels)}', shape='box')
             if isinstance(node, SREDT_node):
                 dot.edge(str(id(node)), str(id(node.left)), label="False")
                 _add_nodes(dot, node.left)

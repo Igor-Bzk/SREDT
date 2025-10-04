@@ -143,10 +143,12 @@ class SymbolicClassifier:
     def div(x, y):
         if isinstance(x, ndarray) and isinstance(y, ndarray):
             return array([float('inf') if yi == 0 and xi > 0 else float('-inf') if yi == 0 and xi < 0 else operator.truediv(xi, yi) for xi, yi in zip(x, y)])
-        if y == 0 and x > 0:
-            return float('inf')
-        elif y == 0 and x < 0:
-            return float('-inf')
+        # if y == 0 and x > 0:
+        #     return float('inf')
+        # elif y == 0 and x < 0:
+        #     return float('-inf')
+        if y == 0:
+            return 0
         return operator.truediv(x, y)
     
     def print_if_verbose(self, verbose_level, *args, **kwargs):
@@ -243,7 +245,10 @@ class SymbolicClassifier:
             algorithms.eaMuPlusLambda(pop, self.toolbox, mu=population_size, lambda_=population_size, cxpb=0.5, mutpb=0.3, ngen=generations, verbose=False)
 
         # Save the best individual, its function and its optimal threshold
-        self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}{"" if not self.arithmetic else f", Threshold search cache hits: {self.gini_split_cache_count}" }")
+        if self.arithmetic:
+            self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}, Threshold search cache hits: {self.gini_split_cache_count}")
+        else:
+            self.print_if_verbose(2, f"Cache hits: {self.gini_cache_count}")
         self.best = tools.selBest(pop, 1)[0]
         self.best_function = self.toolbox.compile(expr=self.best)
         if not self.arithmetic:

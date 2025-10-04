@@ -1,4 +1,5 @@
 from numpy import array, sum, bincount
+from re import search
 
 def gini(y_subset, nb_classes=None, distribution=False):
     if len(y_subset) == 0:
@@ -24,7 +25,9 @@ def splitSetOnFunction(func, X, y, threshold):
     right_mask = predictions == True
     return X[left_mask], X[right_mask], y[left_mask], y[right_mask]
 
-def readable_deap_function(expr):
+def readable_deap_function(expr, features=None):
+    if features is not None:
+        num_re = r'ARG(\d+)'
     """
     Converts a DEAP PrimitiveTree expression to a readable string.
     E.g., add(x, y) -> x + y
@@ -75,7 +78,7 @@ def readable_deap_function(expr):
         elif node.name == 'div':
             return f"({node_to_str(node.args[0])} / {node_to_str(node.args[1])})"
         elif isinstance(node.name, str) and node.name.startswith('ARG'):
-            return node.name
+            return node.name if features is None else features[int(search(num_re, node.name).group(1))]
         else:
             return str(node.name)
         
