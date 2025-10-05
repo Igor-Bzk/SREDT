@@ -122,8 +122,12 @@ def unpickle(filename):
     from pickle import load
     
     try:
-        with open(filename, 'rb') as f:
-            clf = load(f)
+        if isinstance(filename, str):
+            with open(filename, 'rb') as f:
+                clf = load(f)
+        else:
+            with filename as f:
+                clf = load(f)
     except:
         from dill import load as dl_load
         from deap import creator,base, gp
